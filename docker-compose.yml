@@ -1,0 +1,105 @@
+version: "3.8"
+
+services:
+    # Frontend service
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+        ports:
+            - "3000:3000"
+        volumes:
+            - ./frontend:/app
+            - /app/node_modules
+        environment:
+            - NODE_ENV=development
+            - VITE_API_URL=http://api.povodb.test
+        networks:
+            povodb-network:
+                aliases:
+                    - app.povodb.test
+        depends_on:
+            - backend
+        restart: unless-stopped
+        command: sh -c "npm install && npm run dev"
+
+    # Backend service
+    backend:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        ports:
+            - "8000:8000"
+        volumes:
+            - ./backend:/app
+            - /app/.venv
+        environment:
+            - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/povodb
+            - ENVIRONMENT=development
+            - CORS_ORIGINS=http://app.povodb.test,http://localhost:3000,http://localhost
+            - SECRET_KEY=dev_secret_key_change_in_production
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_DB=povodb
+            - POSTGRES_HOST=db
+            - POSTGRES_PORT=5432
+        networks:
+            povodb-network:
+                aliases:
+                    - api.povodb.test
+        depends_on:
+            db:
+                condition: service_healthy
+        command: sh -c "sleep 10 && pg_isready -h db -p 5432 -U postgres -t 60 && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+        restart: unless-stopped
+
+    # Database service
+    db:
+        build:
+            context: ./db
+            dockerfile: Dockerfile
+        ports:
+            - "5432:5432"
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+            - ./db/init:/docker-entrypoint-initdb.d
+        environment:
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_DB=povodb
+        networks:
+            povodb-network:
+                aliases:
+                    - db.povodb.test
+        restart: unless-stopped
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d povodb"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+
+    # Nginx service
+    nginx:
+        build:
+            context: ./nginx
+            dockerfile: Dockerfile
+        ports:
+            - "80:80"
+        volumes:
+            - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+        networks:
+            povodb-network:
+                aliases:
+                    - povodb.test
+        depends_on:
+            - frontend
+            - backend
+        restart: unless-stopped
+
+networks:
+    povodb-network:
+        driver: bridge
+
+volumes:
+    postgres_data:
